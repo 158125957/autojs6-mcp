@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
     steps:
     - name: Checkout AutoJs6 source
       uses: actions/checkout@v4
@@ -16,7 +19,7 @@ jobs:
         ref: master
         path: autojs6
 
-    - name: Checkout MCP module
+    - name: Checkout MCP module files
       uses: actions/checkout@v4
       with:
         path: mcp-module
@@ -27,57 +30,95 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Setup Android SDK manually
+    - name: Setup Android SDK
       run: |
+        set -x
+        export ANDROID_HOME=/usr/local/lib/android/sdk
         mkdir -p $ANDROID_HOME/cmdline-tools
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip
-        unzip -q /tmp/cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
+        unzip -qo /tmp/cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
         mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1
+        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
         echo "ANDROID_HOME=$ANDROID_HOME"
-        echo "SDK installed successfully"
-
-    - name: Cache Gradle
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        ls $ANDROID_HOME/platforms/
+        echo "SDK OK"
 
     - name: Inject MCP module into AutoJs6
       run: |
-        # Copy MCP source files
+        set -x
+        echo "=== Step 1: Copy MCP source files ==="
         mkdir -p autojs6/app/src/main/java/org/autojs/autojs/mcp
-        cp -r mcp-module/src/* autojs6/app/src/main/java/org/autojs/autojs/mcp/
-        
-        # Add NanoHTTPD dependency to build.gradle.kts
-        # AutoJs6 uses Kotlin DSL: dependencies /* Unclassified */ {
-        if ! grep -q "nanohttpd" autojs6/app/build.gradle.kts; then
-          sed -i '/dependencies \/\* Unclassified \*\//a\    implementation("org.nanohttpd:nanohttpd:2.3.1")' autojs6/app/build.gradle.kts
-        fi
-        
-        # Register McpService in AndroidManifest
-        if ! grep -q "McpService" autojs6/app/src/main/AndroidManifest.xml; then
-          sed -i '/<\/application>/i\    <service android:name="org.autojs.autojs.mcp.McpService" android:exported="false"/>' autojs6/app/src/main/AndroidManifest.xml
-        fi
-        
-        echo "MCP module injected"
+        cp -v mcp-module/src/org/autojs/autojs/mcp/*.java autojs6/app/src/main/java/org/autojs/autojs/mcp/
         ls -la autojs6/app/src/main/java/org/autojs/autojs/mcp/
+        
+        echo "=== Step 2: Show build.gradle.kts dependencies section ==="
+        grep -n "dependencies" autojs6/app/build.gradle.kts | head -10
+        
+        echo "=== Step 3: Inject NanoHTTPD dependency ==="
+        python3 << 'PYEOF'
+        import os
+        
+        gradle_path = "autojs6/app/build.gradle.kts"
+        with open(gradle_path, 'r') as f:
+            content = f.read()
+        
+        # Check if already injected
+        if 'nanohttpd' in content:
+            print("NanoHTTPD already in dependencies, skipping")
+        else:
+            # Find the dependencies /* Unclassified */ { block
+            target = 'dependencies /* Unclassified */ {'
+            if target in content:
+                replacement = target + '\n    // MCP Server\n    implementation("org.nanohttpd:nanohttpd:2.3.1")'
+                content = content.replace(target, replacement)
+                with open(gradle_path, 'w') as f:
+                    f.write(content)
+                print("SUCCESS: Injected NanoHTTPD dependency")
+            else:
+                print("ERROR: Could not find target string in build.gradle.kts")
+                # Show what we have
+                for i, line in enumerate(content.split('\n')):
+                    if 'dependen' in line.lower():
+                        print(f"  Line {i+1}: {line}")
+                exit(1)
+        
+        # Also inject into AndroidManifest.xml
+        manifest_path = "autojs6/app/src/main/AndroidManifest.xml"
+        with open(manifest_path, 'r') as f:
+            manifest = f.read()
+        
+        if 'McpService' not in manifest:
+            service_block = '''
+        <service
+            android:name="org.autojs.autojs.mcp.McpService"
+            android:exported="false" />'''
+            manifest = manifest.replace('</application>', service_block + '\n    </application>')
+            with open(manifest_path, 'w') as f:
+                f.write(manifest)
+            print("SUCCESS: Injected McpService into AndroidManifest.xml")
+        else:
+            print("McpService already in manifest, skipping")
+        PYEOF
+        
+        echo "=== Step 4: Verify injection ==="
+        echo "--- build.gradle.kts nanohttpd line ---"
         grep -n "nanohttpd" autojs6/app/build.gradle.kts
+        echo "--- AndroidManifest.xml McpService ---"
+        grep -n "McpService" autojs6/app/src/main/AndroidManifest.xml
+        echo "=== Injection complete ==="
 
-    - name: Build Release APK
+    - name: Build APK
       run: |
+        set -x
         cd autojs6
         chmod +x gradlew
-        ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tail -50
-      timeout-minutes: 30
-
+        ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tail -100
+        
     - name: Upload APK
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: autojs6-mcp-release
-        path: autojs6/app/build/outputs/apk/release/*.apk
+        name: autojs6-mcp-debug
+        path: autojs6/app/build/outputs/apk/debug/*.apk
         retention-days: 7
