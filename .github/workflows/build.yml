@@ -52,9 +52,10 @@ jobs:
         mkdir -p autojs6/app/src/main/java/org/autojs/autojs/mcp
         cp -r mcp-module/src/* autojs6/app/src/main/java/org/autojs/autojs/mcp/
         
-        # Add NanoHTTPD dependency to build.gradle.kts (NOT build.gradle)
+        # Add NanoHTTPD dependency to build.gradle.kts
+        # AutoJs6 uses Kotlin DSL: dependencies /* Unclassified */ {
         if ! grep -q "nanohttpd" autojs6/app/build.gradle.kts; then
-          sed -i '/dependencies {/a\    implementation("org.nanohttpd:nanohttpd:2.3.1")' autojs6/app/build.gradle.kts
+          sed -i '/dependencies \/\* Unclassified \*\//a\    implementation("org.nanohttpd:nanohttpd:2.3.1")' autojs6/app/build.gradle.kts
         fi
         
         # Register McpService in AndroidManifest
