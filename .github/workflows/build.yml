@@ -1,0 +1,75 @@
+name: Build AutoJs6 MCP
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout AutoJs6 source
+      uses: actions/checkout@v4
+      with:
+        repository: SuperMonster003/AutoJs6
+        ref: master
+        path: autojs6
+
+    - name: Checkout MCP module
+      uses: actions/checkout@v4
+      with:
+        path: mcp-module
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+      with:
+        api-level: 34
+        build-tools: '34.0.0'
+
+    - name: Cache Gradle
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+    - name: Inject MCP module into AutoJs6
+      run: |
+        # Copy MCP source files into AutoJs6 project
+        cp -r mcp-module/src/* autojs6/app/src/main/java/org/autojs/autojs/mcp/ 2>/dev/null || true
+        mkdir -p autojs6/app/src/main/java/org/autojs/autojs/mcp
+        cp -r mcp-module/src/* autojs6/app/src/main/java/org/autojs/autojs/mcp/
+        
+        # Add NanoHTTPD dependency to build.gradle
+        if ! grep -q "nanohttpd" autojs6/app/build.gradle; then
+          sed -i '/dependencies {/a\    implementation '"'"'org.nanohttpd:nanohttpd:2.3.1'"'"'' autojs6/app/build.gradle
+        fi
+        
+        # Register McpService in AndroidManifest
+        if ! grep -q "McpService" autojs6/app/src/main/AndroidManifest.xml; then
+          sed -i '/<\/application>/i\    <service android:name="org.autojs.autojs.mcp.McpService" android:exported="false"/>' autojs6/app/src/main/AndroidManifest.xml
+        fi
+        
+        echo "✅ MCP module injected"
+        ls -la autojs6/app/src/main/java/org/autojs/autojs/mcp/
+
+    - name: Build Release APK
+      run: |
+        cd autojs6
+        ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tail -30
+      timeout-minutes: 30
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: autojs6-mcp-release
+        path: autojs6/app/build/outputs/apk/release/*.apk
+        retention-days: 7
