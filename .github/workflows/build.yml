@@ -29,18 +29,12 @@ jobs:
 
     - name: Setup Android SDK manually
       run: |
-        # Install Android SDK command line tools
         mkdir -p $ANDROID_HOME/cmdline-tools
         wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip
         unzip -q /tmp/cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
         mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
-        
-        # Accept licenses
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-        
-        # Install required SDK components
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
-        
         echo "ANDROID_HOME=$ANDROID_HOME"
         echo "SDK installed successfully"
 
@@ -54,19 +48,23 @@ jobs:
 
     - name: Inject MCP module into AutoJs6
       run: |
+        # Copy MCP source files
         mkdir -p autojs6/app/src/main/java/org/autojs/autojs/mcp
         cp -r mcp-module/src/* autojs6/app/src/main/java/org/autojs/autojs/mcp/
         
-        if ! grep -q "nanohttpd" autojs6/app/build.gradle; then
-          sed -i '/dependencies {/a\    implementation '"'"'org.nanohttpd:nanohttpd:2.3.1'"'"'' autojs6/app/build.gradle
+        # Add NanoHTTPD dependency to build.gradle.kts (NOT build.gradle)
+        if ! grep -q "nanohttpd" autojs6/app/build.gradle.kts; then
+          sed -i '/dependencies {/a\    implementation("org.nanohttpd:nanohttpd:2.3.1")' autojs6/app/build.gradle.kts
         fi
         
+        # Register McpService in AndroidManifest
         if ! grep -q "McpService" autojs6/app/src/main/AndroidManifest.xml; then
           sed -i '/<\/application>/i\    <service android:name="org.autojs.autojs.mcp.McpService" android:exported="false"/>' autojs6/app/src/main/AndroidManifest.xml
         fi
         
         echo "MCP module injected"
         ls -la autojs6/app/src/main/java/org/autojs/autojs/mcp/
+        grep -n "nanohttpd" autojs6/app/build.gradle.kts
 
     - name: Build Release APK
       run: |
